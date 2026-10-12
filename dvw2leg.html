@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DVW to LEG Converter</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card {
+  background: #16213e;
+  border-radius: 16px;
+  padding: 40px;
+  max-width: 520px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+h1 { font-size: 1.5rem; color: #e94560; margin-bottom: 6px; }
+.sub { font-size: .85rem; color: #888; margin-bottom: 28px; }
+.drop-zone {
+  border: 2px dashed #e94560;
+  border-radius: 12px;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+}
+.drop-zone:hover { background: rgba(233,69,96,.08); }
+.drop-zone p { font-size: .9rem; color: #aaa; margin-top: 6px; }
+.drop-zone .hint { font-size: .75rem; color: #666; margin-top: 6px; }
+#fileInput { display: none; }
+.file-list { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
+.file-item {
+  background: #0f3460;
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.fname { flex: 1; font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.badge {
+  font-size: .7rem;
+  padding: 3px 8px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.badge-ok  { background: #1a4a2e; color: #4ade80; }
+.badge-err { background: #4a1a1a; color: #f87171; }
+.badge-wait { background: #2a2a3e; color: #999; }
+.dl-btn {
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: .78rem;
+  cursor: pointer;
+}
+.dl-btn:hover { background: #c73450; }
+.btn-convert {
+  display: block;
+  width: 100%;
+  margin-top: 20px;
+  padding: 14px;
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-convert:hover:not([disabled]) { background: #c73450; }
+.btn-convert[disabled] { background: #555; cursor: default; }
+.stats { margin-top: 14px; font-size: .78rem; color: #888; text-align: center; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>DVW &#8594; LEG</h1>
+  <p class="sub">DataVolley 4 &#8594; DataVolley 2 &middot; conversione nel browser, nessun upload</p>
+
+  <div class="drop-zone" id="dropZone">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none"
+         stroke="#e94560" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+         style="margin-bottom:12px">
+      <polyline points="16 16 12 12 8 16"></polyline>
+      <line x1="12" y1="12" x2="12" y2="21"></line>
+      <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
+    </svg>
+    <p>Trascina qui i file <strong>.dvw</strong></p>
+    <p>oppure <strong>clicca</strong> per selezionarli</p>
+    <p class="hint">Supporta pi&ugrave; file contemporaneamente</p>
+    <input type="file" id="fileInput" accept=".dvw" multiple>
+  </div>
+
+  <div class="file-list" id="fileList"></div>
+  <button class="btn-convert" id="btnConvert" disabled>Converti e scarica</button>
+  <p class="stats" id="stats"></p>
+</div>
+
+<script>
+// ============================================================
+//  DataVolley 4 (.dvw) -> DataVolley 2 (.leg) converter
+// ============================================================
+
+var SKILL = {S:'B',R:'R',E:'A',A:'S',B:'M',D:'D',F:'F'};
+var ZONE  = {Q:'V',H:'A',O:'L',U:'T',T:'T',M:'M',V:'V',A:'A',L:'L'};
+
+function xlat3(s) {
+  if (s.length < 3) return s;
+  var skill = s[0], zone = s[1], qual = s[2];
+  var z2 = ZONE[zone] !== undefined ? ZONE[zone] : zone;
+  if (skill === 'F') return 'D' + z2 + qual + 'F';
+  var s2 = SKILL[skill] !== undefined ? SKILL[skill] : skill;
+  return s2 + z2 + qual;
+}
+
+function nonempty(arr) {
+  return arr.filter(function(l){ return l.trim().length > 0; });
+}
+
+function parseDvw(content) {
+  var sections = {};
+  var header   = {};
+  var curKey   = null;
+  var curLines = [];
+  var lines    = content.split('\n');
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].replace(/\r$/, '');
+    if (/^\[3[\w\-]+\]$/.test(line)) {
+      if (curKey !== null) sections[curKey] = curLines;
+      curKey   = line;
+      curLines = [];
+    } else if (curKey !== null) {
+      curLines.push(line);
+    }
+  }
+  if (curKey !== null) sections[curKey] = curLines;
+
+  var scout_hdr = sections['[3DATAVOLLEYSCOUT]'] || [];
+  for (var j = 0; j < scout_hdr.length; j++) {
+    var ci = scout_hdr[j].indexOf(':');
+    if (ci > 0) {
+      var k = scout_hdr[j].slice(0, ci).trim();
+      var v = scout_hdr[j].slice(ci + 1).trim();
+      header[k] = v;
+    }
+  }
+  return {sections: sections, header: header};
+}
+
+function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+
+function convert(dvwContent) {
+  var parsed   = parseDvw(dvwContent);
+  var S        = parsed.sections;
+  var H        = parsed.header;
+  var out      = [];
+
+  function get(k) { return S[k] || []; }
+
+  var genParts = [];
+  if (H['GENERATOR-IDP']) genParts.push(H['GENERATOR-IDP']);
+  if (H['GENERATOR-REL']) genParts.push(H['GENERATOR-REL']);
+  if (H['GENERATOR-VER']) genParts.push(H['GENERATOR-VER']);
+  var genStr = genParts.join(' ');
+
+  // [Match]
+  out.push('[Match]');
+  var ml = nonempty(get('[3MATCH]'));
+  if (ml.length) {
+    var p1 = ml[0].split(';');
+    while (p1.length < 12) p1.push('');
+    var p2 = ml.length > 1 ? ml[1].split(';') : [];
+    var row = [
+      p1[0],p1[1],p1[2],p1[3],p1[4],p1[5],p1[6],p1[7],
+      '0','1',
+      p2[0]||'', p2[1]||'',
+      genStr
+    ];
+    out.push(row.join(';'));
+  }
+
+  // [Team]
+  out.push('[Team]');
+  var teamLines = nonempty(get('[3TEAMS]'));
+  for (var t = 0; t < teamLines.length; t++) {
+    var tp = teamLines[t].split(';');
+    out.push(tp.slice(0,5).join(';') + ';');
+  }
+
+  // [Oders]
+  out.push('[Oders]');
+  var moreLines = nonempty(get('[3MORE]'));
+  if (moreLines.length) {
+    var op = moreLines[0].split(';');
+    op[0]  = op[0].replace(/,\s+/g, '  ');
+    while (op.length < 6) op.push('');
+    out.push(op.slice(0,6).join(';') + ';;0;0;');
+  }
+
+  // [MatchComments]
+  out.push('[MatchComments]');
+  var cl = nonempty(get('[3COMMENTS]'));
+  out.push((cl.length ? cl[0] : 'no comments') + ';;;;;');
+
+  // [Set]
+  out.push('[Set]');
+  var setLines = nonempty(get('[3SET]'));
+  for (var s = 0; s < setLines.length; s++) out.push(setLines[s]);
+
+  // ---- jersey remap for away players > 49 -------------------------
+  var homeLines = nonempty(get('[3PLAYERS-H]'));
+  var awayLines = nonempty(get('[3PLAYERS-V]'));
+
+  function jerseyOf(line) {
+    var p = line.split(';');
+    return (p[1] && /^\d+$/.test(p[1].trim())) ? parseInt(p[1], 10) : 0;
+  }
+
+  var homeJs  = {};
+  for (var h = 0; h < homeLines.length; h++) homeJs[jerseyOf(homeLines[h])] = true;
+
+  var awayOrig = [];
+  for (var a = 0; a < awayLines.length; a++) awayOrig.push(jerseyOf(awayLines[a]));
+
+  var occupied = {};
+  for (var k in homeJs) occupied[k] = true;
+  for (var ai = 0; ai < awayOrig.length; ai++) {
+    if (awayOrig[ai] <= 49) occupied[awayOrig[ai]] = true;
+  }
+
+  var free = [];
+  for (var n = 1; n <= 49; n++) { if (!occupied[n]) free.push(n); }
+
+  var remap = {};
+  var fi = 0;
+  for (var ri = 0; ri < awayOrig.length; ri++) {
+    if (awayOrig[ri] > 49 && fi < free.length) {
+      remap[awayOrig[ri]] = free[fi++];
+    }
+  }
+
+  function fmtPlayer(line, isAway) {
+    var p = line.split(';');
+    if (p.length < 16) return line;
+    if (isAway) {
+      var j = parseInt(p[1], 10);
+      if (j > 49 && remap[j] !== undefined) p[1] = String(remap[j]);
+    }
+    var team   = p[0];
+    var jersey = p[1];
+    var idx    = p[2];
+    var rots   = p.slice(3, 8);
+    var code   = p[8];
+    var fname  = p[11] || '';
+    var lib    = p[12] || '';
+    var role   = p[13] || '';
+    var dvid   = p[15] || '';
+    return [team,jersey,idx].concat(rots).concat([code,fname,lib,dvid,'','','','',role,'']).join(';');
+  }
+
+  out.push('[Player1]');
+  for (var pi = 0; pi < homeLines.length; pi++) out.push(fmtPlayer(homeLines[pi], false));
+  out.push('[Player2]');
+  for (var qi = 0; qi < awayLines.length; qi++) out.push(fmtPlayer(awayLines[qi], true));
+
+  // ---- Scout ------------------------------------------------------
+  out.push('[Scout]');
+
+  var ACTION_RE = /^([a*])(\d{2})([SREABDFsreabdf])(.)(.)(.*)$/;
+  var TMERR_RE  = /^[a*]\$\$&/;
+
+  function playerCode(teamCh, jerseyStr) {
+    var j  = parseInt(jerseyStr, 10);
+    if (teamCh === '*') return pad2(j);
+    var j2 = (remap[j] !== undefined) ? remap[j] : j;
+    return pad2(j2 + 50);
+  }
+
+  var scoutLines = get('[3SCOUT]');
+  for (var si = 0; si < scoutLines.length; si++) {
+    var line = scoutLines[si];
+    if (!line.trim()) continue;
+
+    var parts = line.split(';');
+    while (parts.length < 14) parts.push('');
+    parts = parts.slice(0, 14);
+
+    var code = parts[0].split('>')[0]; // strip >LUp
+
+    if (TMERR_RE.test(code)) {
+      var teamCh = code[0];
+      var rest   = code.slice(3);
+      var player = (teamCh === '*') ? '49' : '99';
+      if (rest.length >= 3 && rest[0] === '&') {
+        var z2 = ZONE[rest[1]] !== undefined ? ZONE[rest[1]] : rest[1];
+        parts[0] = player + '&' + z2 + rest[2];
+      } else {
+        parts[0] = player + rest;
+      }
+    } else {
+      var m = ACTION_RE.exec(code);
+      if (m) {
+        parts[0] = playerCode(m[1], m[2]) + xlat3(m[3] + m[4] + m[5]);
+      } else {
+        parts[0] = code;
+      }
+    }
+    out.push(parts.join(';') + ';');
+  }
+
+  return out.join('\n') + '\n';
+}
+
+// ============================================================
+//  UI
+// ============================================================
+
+var dropZone   = document.getElementById('dropZone');
+var fileInput  = document.getElementById('fileInput');
+var fileList   = document.getElementById('fileList');
+var btnConvert = document.getElementById('btnConvert');
+var statsEl    = document.getElementById('stats');
+
+var pending = [];
+
+dropZone.addEventListener('click', function(){ fileInput.click(); });
+
+fileInput.addEventListener('change', function(e){
+  addFiles(Array.prototype.slice.call(e.target.files));
+});
+
+dropZone.addEventListener('dragover', function(e){
+  e.preventDefault();
+  dropZone.style.background = 'rgba(233,69,96,.08)';
+});
+dropZone.addEventListener('dragleave', function(){
+  dropZone.style.background = '';
+});
+dropZone.addEventListener('drop', function(e){
+  e.preventDefault();
+  dropZone.style.background = '';
+  var files = Array.prototype.slice.call(e.dataTransfer.files)
+    .filter(function(f){ return f.name.toLowerCase().endsWith('.dvw'); });
+  addFiles(files);
+});
+
+function addFiles(files) {
+  if (!files.length) return;
+  pending = [];
+  fileList.innerHTML = '';
+  for (var i = 0; i < files.length; i++) {
+    var item = { file: files[i], result: null, outName: files[i].name.replace(/\.dvw$/i, '.leg') };
+    pending.push(item);
+    var div  = document.createElement('div');
+    div.className = 'file-item';
+    var sp1  = document.createElement('span');
+    sp1.className = 'fname';
+    sp1.textContent = files[i].name;
+    var sp2  = document.createElement('span');
+    sp2.className = 'badge badge-wait';
+    sp2.textContent = 'in attesa';
+    sp2.id = 'badge-' + i;
+    div.appendChild(sp1);
+    div.appendChild(sp2);
+    fileList.appendChild(div);
+  }
+  btnConvert.disabled = false;
+  statsEl.textContent = '';
+}
+
+btnConvert.addEventListener('click', function(){
+  btnConvert.disabled = true;
+  var ok = 0, err = 0;
+  var idx = 0;
+
+  function processNext() {
+    if (idx >= pending.length) {
+      statsEl.textContent = ok + ' convertit' + (ok===1?'o':'i') +
+        (err ? ', ' + err + ' error' + (err===1?'e':'i') : '') + '.';
+      return;
+    }
+    var i    = idx++;
+    var item = pending[i];
+    var badge = document.getElementById('badge-' + i);
+    badge.className = 'badge badge-wait';
+    badge.textContent = 'elaborazione...';
+
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        var text   = e.target.result;
+        var result = convert(text);
+        pending[i].result = result;
+        badge.className  = 'badge badge-ok';
+        badge.textContent = 'OK';
+        var btn = document.createElement('button');
+        btn.className = 'dl-btn';
+        btn.textContent = 'Scarica';
+        (function(r, n){ btn.onclick = function(){ downloadLeg(r, n); }; })(result, item.outName);
+        badge.parentElement.appendChild(btn);
+        ok++;
+      } catch(ex) {
+        badge.className  = 'badge badge-err';
+        badge.textContent = 'Errore: ' + ex.message;
+        err++;
+      }
+      processNext();
+    };
+    reader.onerror = function() {
+      badge.className  = 'badge badge-err';
+      badge.textContent = 'Lettura fallita';
+      err++;
+      processNext();
+    };
+    reader.readAsText(item.file, 'iso-8859-1');
+  }
+
+  processNext();
+});
+
+function downloadLeg(text, filename) {
+  var bytes = new Uint8Array(text.length);
+  for (var i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
+  var blob = new Blob([bytes], {type: 'application/octet-stream'});
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
